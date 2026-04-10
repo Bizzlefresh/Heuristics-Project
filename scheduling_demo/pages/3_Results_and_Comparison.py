@@ -65,6 +65,7 @@ st.markdown(
 st.markdown("---")
 
 st.subheader("Professor-requested statistical evaluation")
+
 num_runs = st.slider("Number of randomized runs", min_value=5, max_value=50, value=30, step=5)
 
 if st.button("Run Multi-Run Evaluation", use_container_width=True):

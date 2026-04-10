@@ -25,14 +25,14 @@ if "run_requested" not in st.session_state:
 
 
 st.title("Scheduling Algorithms Demo")
-st.caption("A cleaner presentation app for FCFS, SJF, LPT, Greedy, and Genetic Algorithm scheduling in a multi-machine system.")
+st.caption("A cleaner presentation app for FCFS, SJF, LPT, and Greedy scheduling in a multi-machine system.")
 
 left, right = st.columns([1.2, 1])
 
 with left:
     st.subheader("What this project shows")
     st.write(
-        "This demo compares scheduling algorithms on the same generated job set so you can clearly show how algorithm choice affects the schedule."
+        "This demo compares four scheduling heuristics on the same generated job set so you can clearly show how algorithm choice affects the schedule."
     )
     st.write(
         "Use the pages in the sidebar from top to bottom: Configure Jobs → Run Demo → Results & Comparison."

@@ -29,11 +29,7 @@ with left:
 
 with right:
     st.subheader("Demo controls")
-    selected_algorithm = st.radio(
-        "Choose one algorithm to demonstrate",
-        list(results.keys()),
-        index=list(results.keys()).index(st.session_state.get("selected_algorithm", "FCFS")),
-    )
+    selected_algorithm = st.radio("Choose one algorithm to demonstrate", list(results.keys()), index=list(results.keys()).index(st.session_state.get("selected_algorithm", "FCFS")))
     st.session_state.selected_algorithm = selected_algorithm
     speed = st.slider("Animation speed", min_value=0.5, max_value=3.0, value=1.0, step=0.5)
     show_labels = st.checkbox("Show job labels", value=True)
