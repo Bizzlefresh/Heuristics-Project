@@ -1,331 +1,126 @@
 from __future__ import annotations
 
-import random
-import statistics
-from typing import Dict, List, Tuple
+import matplotlib.pyplot as plt
+import pandas as pd
+import streamlit as st
+
+from utils.scheduler_core import METRIC_EXPLANATIONS, build_results_table, run_multiple_experiments
+from utils.visuals import draw_metric_chart, draw_schedule, draw_boxplot, draw_line_chart
 
 
-def calculate_metrics(jobs: List[int], machines: List[int], completion_times: List[int]) -> Tuple[int, float, float]:
-    makespan = max(machines) if machines else 0
-    avg_completion = sum(completion_times) / len(completion_times) if completion_times else 0.0
-    utilisation = sum(jobs) / (len(machines) * makespan) if makespan else 0.0
-    return makespan, avg_completion, utilisation
+st.set_page_config(page_title="Results & Comparison", page_icon="📈", layout="wide")
 
+st.title("Results & Comparison")
 
-def build_result(
-    name: str,
-    jobs: List[int],
-    assignments: List[dict],
-    machines: List[int],
-    completion_times: List[int],
-) -> dict:
-    makespan, avg_completion, utilisation = calculate_metrics(jobs, machines, completion_times)
-    return {
-        "name": name,
-        "jobs": jobs,
-        "assignments": assignments,
-        "machines": machines,
-        "makespan": makespan,
-        "avg_completion": avg_completion,
-        "utilisation": utilisation,
-    }
+if not st.session_state.get("jobs_generated"):
+    st.warning("Generate a job set first on the Configure Jobs page.")
+    st.stop()
 
+results = st.session_state.results
+results_df = build_results_table(results)
+best_algorithm = results_df.iloc[0]["Algorithm"]
 
-def fcfs(jobs: List[int], num_machines: int) -> dict:
-    machines = [0] * num_machines
-    completion_times: List[int] = []
-    assignments: List[dict] = []
+st.success(f"Best algorithm by makespan on this generated job set: {best_algorithm}")
 
-    for job_id, duration in enumerate(jobs, start=1):
-        machine = min(range(num_machines), key=lambda i: machines[i])
-        start = machines[machine]
-        finish = start + duration
-        machines[machine] = finish
-        completion_times.append(finish)
-        assignments.append(
+c1, c2 = st.columns([1.15, 1])
+with c1:
+    st.subheader("Comparison table")
+    st.dataframe(results_df, use_container_width=True, hide_index=True)
+with c2:
+    st.subheader("Metric guide")
+    for name, text in METRIC_EXPLANATIONS.items():
+        st.markdown(f"**{name}:** {text}")
+
+m1, m2, m3 = st.columns(3)
+for col, metric in zip([m1, m2, m3], ["Makespan", "Average Completion", "Utilisation"]):
+    with col:
+        fig = draw_metric_chart(results_df, metric)
+        st.pyplot(fig, clear_figure=True)
+        plt.close(fig)
+
+st.markdown("---")
+
+selected_algorithm = st.selectbox("Inspect one final schedule", list(results.keys()), index=list(results.keys()).index(best_algorithm))
+result = results[selected_algorithm]
+fig = draw_schedule(result, num_machines=len(result["machines"]), elapsed=result["makespan"], annotate=True)
+st.pyplot(fig, clear_figure=True)
+plt.close(fig)
+
+st.subheader("Explain these metrics in your own words")
+mc1, mc2, mc3 = st.columns(3)
+mc1.metric("Makespan", result["makespan"])
+mc2.metric("Average Completion", f"{result['avg_completion']:.2f}")
+mc3.metric("Utilisation", f"{result['utilisation']:.4f}")
+
+st.markdown(
+    f"""
+**Why {selected_algorithm} got these values:**
+- The schedule above shows exactly when every job starts and ends.
+- **Makespan** is determined by the machine that finishes last.
+- **Average completion** is determined by the finish times of all jobs.
+- **Utilisation** depends on total job work divided by total machine capacity over the whole makespan.
+"""
+)
+
+st.markdown("---")
+
+st.subheader("Professor-requested statistical evaluation")
+num_runs = st.slider("Number of randomized runs", min_value=5, max_value=50, value=30, step=5)
+
+if st.button("Run Multi-Run Evaluation", use_container_width=True):
+    summary, results_per_algo, avg_ga_history = run_multiple_experiments(
+        num_runs=num_runs,
+        config_name=st.session_state.selected_config,
+        seed=st.session_state.seed,
+    )
+
+    summary_rows = []
+    for algo, vals in summary.items():
+        summary_rows.append(
             {
-                "job_id": job_id,
-                "duration": duration,
-                "machine": machine,
-                "start": start,
-                "finish": finish,
-                "order_reason": "Jobs stay in arrival order.",
+                "Algorithm": algo,
+                "Average Makespan": round(vals["Average"], 2),
+                "Minimum": vals["Min"],
+                "Maximum": vals["Max"],
+                "Std Dev": round(vals["Std"], 2),
             }
         )
 
-    return build_result("FCFS", jobs, assignments, machines, completion_times)
+    stats_df = pd.DataFrame(summary_rows).sort_values("Average Makespan").reset_index(drop=True)
 
+    st.subheader(f"{num_runs}-Run Statistical Summary")
+    st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
-def sjf(jobs: List[int], num_machines: int) -> dict:
-    ordered = sorted(list(enumerate(jobs, start=1)), key=lambda x: x[1])
-    return _assign_ordered("SJF", ordered, jobs, num_machines, "Shortest remaining duration scheduled first.")
+    s1, s2 = st.columns(2)
+    with s1:
+        avg_df = stats_df[["Algorithm", "Average Makespan"]].rename(columns={"Average Makespan": "Makespan"})
+        fig = draw_metric_chart(avg_df, "Makespan")
+        st.pyplot(fig, clear_figure=True)
+        plt.close(fig)
 
+    with s2:
+        fig = draw_boxplot(results_per_algo)
+        st.pyplot(fig, clear_figure=True)
+        plt.close(fig)
 
-def lpt(jobs: List[int], num_machines: int) -> dict:
-    ordered = sorted(list(enumerate(jobs, start=1)), key=lambda x: x[1], reverse=True)
-    return _assign_ordered("LPT", ordered, jobs, num_machines, "Longest jobs scheduled first to balance load.")
-
-
-def greedy(jobs: List[int], num_machines: int) -> dict:
-    machines = [0] * num_machines
-    completion_times: List[int] = []
-    assignments: List[dict] = []
-
-    for job_id, duration in enumerate(jobs, start=1):
-        best_machine = None
-        best_makespan = float("inf")
-
-        for i in range(num_machines):
-            temp = machines.copy()
-            temp[i] += duration
-            projected_makespan = max(temp)
-            if projected_makespan < best_makespan:
-                best_makespan = projected_makespan
-                best_machine = i
-
-        start = machines[best_machine]
-        finish = start + duration
-        machines[best_machine] = finish
-        completion_times.append(finish)
-        assignments.append(
-            {
-                "job_id": job_id,
-                "duration": duration,
-                "machine": best_machine,
-                "start": start,
-                "finish": finish,
-                "order_reason": "Current job placed on machine with best projected makespan.",
-            }
+    if avg_ga_history:
+        st.subheader("Average Genetic Algorithm Convergence")
+        fig = draw_line_chart(
+            avg_ga_history,
+            title="GA Convergence Across Runs",
+            x_label="Generation",
+            y_label="Best Makespan",
         )
+        st.pyplot(fig, clear_figure=True)
+        plt.close(fig)
 
-    return build_result("Greedy", jobs, assignments, machines, completion_times)
-
-
-def _assign_ordered(
-    name: str,
-    ordered_jobs: List[Tuple[int, int]],
-    original_jobs: List[int],
-    num_machines: int,
-    reason: str,
-) -> dict:
-    machines = [0] * num_machines
-    completion_times: List[int] = []
-    assignments: List[dict] = []
-
-    for job_id, duration in ordered_jobs:
-        machine = min(range(num_machines), key=lambda i: machines[i])
-        start = machines[machine]
-        finish = start + duration
-        machines[machine] = finish
-        completion_times.append(finish)
-        assignments.append(
-            {
-                "job_id": job_id,
-                "duration": duration,
-                "machine": machine,
-                "start": start,
-                "finish": finish,
-                "order_reason": reason,
-            }
-        )
-
-    return build_result(name, original_jobs, assignments, machines, completion_times)
-
-
-# =========================
-# GENETIC ALGORITHM
-# =========================
-
-def _random_chromosome(num_jobs: int, num_machines: int) -> List[int]:
-    return [random.randint(0, num_machines - 1) for _ in range(num_jobs)]
-
-
-def _compute_makespan_from_chromosome(chromosome: List[int], jobs: List[int], num_machines: int) -> int:
-    machines = [0] * num_machines
-    for job_idx, machine in enumerate(chromosome):
-        machines[machine] += jobs[job_idx]
-    return max(machines)
-
-
-def _fitness(chromosome: List[int], jobs: List[int], num_machines: int) -> float:
-    return 1 / (1 + _compute_makespan_from_chromosome(chromosome, jobs, num_machines))
-
-
-def _tournament(population: List[List[int]], jobs: List[int], num_machines: int, k: int = 3) -> List[int]:
-    selected = random.sample(population, k)
-    selected.sort(key=lambda c: _compute_makespan_from_chromosome(c, jobs, num_machines))
-    return selected[0][:]
-
-
-def _crossover(p1: List[int], p2: List[int]) -> List[int]:
-    if len(p1) < 2:
-        return p1[:]
-    point = random.randint(1, len(p1) - 1)
-    return p1[:point] + p2[point:]
-
-
-def _mutate(chromosome: List[int], num_machines: int, rate: float = 0.1) -> List[int]:
-    new = chromosome[:]
-    for i in range(len(new)):
-        if random.random() < rate:
-            new[i] = random.randint(0, num_machines - 1)
-    return new
-
-
-def genetic_algorithm(
-    jobs: List[int],
-    num_machines: int,
-    population_size: int = 40,
-    generations: int = 100,
-    mutation_rate: float = 0.1,
-    elite_size: int = 2,
-) -> Tuple[dict, List[int]]:
-    num_jobs = len(jobs)
-    population = [_random_chromosome(num_jobs, num_machines) for _ in range(population_size)]
-
-    history: List[int] = []
-
-    for _ in range(generations):
-        population.sort(key=lambda c: _compute_makespan_from_chromosome(c, jobs, num_machines))
-
-        best = population[0]
-        best_makespan = _compute_makespan_from_chromosome(best, jobs, num_machines)
-        history.append(best_makespan)
-
-        next_pop = population[:elite_size]
-
-        while len(next_pop) < population_size:
-            p1 = _tournament(population, jobs, num_machines)
-            p2 = _tournament(population, jobs, num_machines)
-            child = _crossover(p1, p2)
-            child = _mutate(child, num_machines, mutation_rate)
-            next_pop.append(child)
-
-        population = next_pop
-
-    population.sort(key=lambda c: _compute_makespan_from_chromosome(c, jobs, num_machines))
-    best = population[0]
-
-    machines = [0] * num_machines
-    completion_times: List[int] = []
-    assignments: List[dict] = []
-
-    for job_id, duration in enumerate(jobs, start=1):
-        m = best[job_id - 1]
-        start = machines[m]
-        finish = start + duration
-        machines[m] = finish
-        completion_times.append(finish)
-        assignments.append(
-            {
-                "job_id": job_id,
-                "duration": duration,
-                "machine": m,
-                "start": start,
-                "finish": finish,
-                "order_reason": "Assigned via Genetic Algorithm optimisation.",
-            }
-        )
-
-    result = build_result("Genetic Algorithm", jobs, assignments, machines, completion_times)
-    return result, history
-
-
-ALGORITHMS = {
-    "FCFS": fcfs,
-    "SJF": sjf,
-    "LPT": lpt,
-    "Greedy": greedy,
-    "Genetic Algorithm": lambda jobs, m: genetic_algorithm(jobs, m)[0],
-}
-
-CONFIGS = {
-    "Configuration 1": {"num_jobs": 20, "num_machines": 3},
-    "Configuration 2": {"num_jobs": 50, "num_machines": 3},
-    "Configuration 3": {"num_jobs": 50, "num_machines": 5},
-}
-
-CONFIG_DESCRIPTIONS = {
-    "Configuration 1": "20 jobs across 3 machines. Good for explaining the idea clearly.",
-    "Configuration 2": "50 jobs across 3 machines. Higher load with fewer machines.",
-    "Configuration 3": "50 jobs across 5 machines. More machines, more parallelism.",
-}
-
-ALGO_EXPLANATIONS = {
-    "FCFS": "First Come First Serve keeps the original arrival order of jobs and always sends the next job to the earliest available machine.",
-    "SJF": "Shortest Job First sorts jobs from smallest to largest duration, then schedules them onto the earliest available machine.",
-    "LPT": "Longest Processing Time sorts jobs from largest to smallest duration so long jobs are placed early and the machine loads are often more balanced.",
-    "Greedy": "Greedy keeps the arrival order but, for each next job, checks every machine and chooses the one that gives the smallest projected makespan at that moment.",
-    "Genetic Algorithm": "Genetic Algorithm searches for a better assignment of jobs to machines over multiple generations using selection, crossover, and mutation.",
-}
-
-METRIC_EXPLANATIONS = {
-    "Makespan": "The total finishing time of the whole schedule. It is the maximum machine finish time, so lower is better.",
-    "Average Completion": "The average of all job finish times. Lower means jobs tend to finish earlier on average.",
-    "Utilisation": "Total busy time divided by (number of machines × makespan). Values closer to 1 mean the machines are kept busy for most of the schedule.",
-}
-
-def generate_jobs(n: int, seed: int, min_time: int = 1, max_time: int = 50) -> List[int]:
-    rng = random.Random(seed)
-    return [rng.randint(min_time, max_time) for _ in range(n)]
-
-
-def compute_all_results(jobs: List[int], num_machines: int) -> Dict[str, dict]:
-    return {name: func(jobs, num_machines) for name, func in ALGORITHMS.items()}
-
-
-def build_results_table(results: Dict[str, dict]):
-    import pandas as pd
-
-    rows = []
-    for name, result in results.items():
-        rows.append(
-            {
-                "Algorithm": name,
-                "Makespan": result["makespan"],
-                "Average Completion": round(result["avg_completion"], 2),
-                "Utilisation": round(result["utilisation"], 4),
-            }
-        )
-    return pd.DataFrame(rows).sort_values("Makespan").reset_index(drop=True)
-
-
-# =========================
-# MULTI-RUN EVALUATION
-# =========================
-
-def run_multiple_experiments(num_runs: int, config_name: str, seed: int = 42):
-    config = CONFIGS[config_name]
-
-    results_per_algo = {name: [] for name in ALGORITHMS.keys()}
-    ga_histories: List[List[int]] = []
-
-    for i in range(num_runs):
-        jobs = generate_jobs(config["num_jobs"], seed + i)
-
-        for name, func in ALGORITHMS.items():
-            if name == "Genetic Algorithm":
-                result, history = genetic_algorithm(jobs, config["num_machines"])
-                ga_histories.append(history)
-            else:
-                result = func(jobs, config["num_machines"])
-
-            results_per_algo[name].append(result["makespan"])
-
-    summary = {}
-    for name, values in results_per_algo.items():
-        summary[name] = {
-            "Average": sum(values) / len(values),
-            "Min": min(values),
-            "Max": max(values),
-            "Std": statistics.stdev(values) if len(values) > 1 else 0.0,
-        }
-
-    avg_ga_history: List[float] = []
-    if ga_histories:
-        max_len = max(len(h) for h in ga_histories)
-        for idx in range(max_len):
-            vals = [h[idx] for h in ga_histories if idx < len(h)]
-            avg_ga_history.append(sum(vals) / len(vals))
-
-    return summary, results_per_algo, avg_ga_history
+    st.markdown(
+        """
+**How to interpret the statistical results:**
+- **Average Makespan** shows the overall performance across many randomized runs.
+- **Minimum and Maximum** show the best and worst observed outcomes.
+- **Standard Deviation** shows consistency. Lower values mean the algorithm behaves more reliably.
+- The **boxplot** shows the spread of makespan values across runs.
+- The **GA convergence plot** shows how the evolutionary method improves its best solution over generations.
+"""
+    )
