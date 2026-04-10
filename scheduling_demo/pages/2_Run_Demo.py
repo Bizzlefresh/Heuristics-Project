@@ -1,82 +1,63 @@
 from __future__ import annotations
 
-import time
-
-import matplotlib.pyplot as plt
 import streamlit as st
 
-from utils.scheduler_core import ALGO_EXPLANATIONS, CONFIGS
-from utils.visuals import draw_schedule
+from utils.scheduler_core import CONFIGS, CONFIG_DESCRIPTIONS, compute_all_results, generate_jobs
+from utils.visuals import draw_jobs_chart
 
 
-st.set_page_config(page_title="Run Demo", page_icon="▶️", layout="wide")
+st.set_page_config(page_title="Configure Jobs", page_icon="⚙️", layout="wide")
 
-st.title("Run Demo")
+st.title("Configure Jobs")
+st.write("Set the experiment first. The demo and results pages will stay empty until you generate the jobs.")
 
-if not st.session_state.get("jobs_generated"):
-    st.warning("Generate a job set first on the Configure Jobs page.")
-    st.stop()
+config_name = st.selectbox(
+    "Choose configuration",
+    list(CONFIGS.keys()),
+    index=list(CONFIGS.keys()).index(st.session_state.get("selected_config", "Configuration 1")),
+)
+st.session_state.selected_config = config_name
+config = CONFIGS[config_name]
 
-config = CONFIGS[st.session_state.selected_config]
-results = st.session_state.results
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("Number of jobs", config["num_jobs"])
+    st.metric("Number of machines", config["num_machines"])
+with col2:
+    seed = st.number_input(
+        "Random seed",
+        min_value=1,
+        max_value=9999,
+        value=int(st.session_state.get("seed", 42)),
+        step=1,
+    )
+    st.session_state.seed = int(seed)
+    st.write(CONFIG_DESCRIPTIONS[config_name])
 
-left, right = st.columns([1.2, 0.9])
-
-with left:
-    st.subheader("Live visual area")
-    st.write("Each horizontal lane is one machine. Each block is one job. The block starts at the job start time and ends at the job finish time.")
-    chart_placeholder = st.empty()
-
-with right:
-    st.subheader("Demo controls")
-    selected_algorithm = st.radio("Choose one algorithm to demonstrate", list(results.keys()), index=list(results.keys()).index(st.session_state.get("selected_algorithm", "FCFS")))
-    st.session_state.selected_algorithm = selected_algorithm
-    speed = st.slider("Animation speed", min_value=0.5, max_value=3.0, value=1.0, step=0.5)
-    show_labels = st.checkbox("Show job labels", value=True)
-    st.info(ALGO_EXPLANATIONS[selected_algorithm])
-
-    if st.button("Run Live Demo", use_container_width=True):
-        result = results[selected_algorithm]
-        total = result["makespan"]
-        step = max(1.0, total / 30)
-        current = 0.0
-        while current <= total:
-            fig = draw_schedule(result, config["num_machines"], elapsed=current, annotate=show_labels)
-            chart_placeholder.pyplot(fig, clear_figure=True)
-            plt.close(fig)
-            time.sleep(max(0.04, 0.18 / speed))
-            current += step
-
-        fig = draw_schedule(result, config["num_machines"], elapsed=total, annotate=show_labels)
-        chart_placeholder.pyplot(fig, clear_figure=True)
-        plt.close(fig)
-        st.session_state.run_requested = True
-
-    if st.button("Show Final Schedule Only", use_container_width=True):
-        result = results[selected_algorithm]
-        fig = draw_schedule(result, config["num_machines"], elapsed=result["makespan"], annotate=show_labels)
-        chart_placeholder.pyplot(fig, clear_figure=True)
-        plt.close(fig)
+if st.button("Generate Job Set", use_container_width=True):
+    jobs = generate_jobs(config["num_jobs"], st.session_state.seed)
+    results = compute_all_results(jobs, config["num_machines"])
+    st.session_state.jobs = jobs
+    st.session_state.results = results
+    st.session_state.jobs_generated = True
+    st.session_state.run_requested = False
+    st.success("Jobs generated. You can now move to Run Demo or Results & Comparison.")
 
 st.markdown("---")
 
-st.subheader("How to read the visual")
-exp1, exp2, exp3 = st.columns(3)
-exp1.markdown("**Job block length** = processing time / duration")
-exp2.markdown("**s=...** under a block = start time")
-exp3.markdown("**e=...** above a block = finish time")
+if st.session_state.get("jobs_generated"):
+    st.subheader("Current generated jobs")
+    jobs = st.session_state.jobs
+    preview_cols = st.columns(4)
+    preview_cols[0].metric("Min duration", min(jobs))
+    preview_cols[1].metric("Max duration", max(jobs))
+    preview_cols[2].metric("Average duration", f"{sum(jobs)/len(jobs):.2f}")
+    preview_cols[3].metric("Seed used", st.session_state.seed)
 
-result = results[selected_algorithm]
-detail_rows = []
-for item in result["assignments"]:
-    detail_rows.append(
-        {
-            "Job": f"J{item['job_id']}",
-            "Duration": item["duration"],
-            "Machine": f"Machine {item['machine'] + 1}",
-            "Start": item["start"],
-            "Finish": item["finish"],
-        }
-    )
-st.subheader(f"Detailed assignment table for {selected_algorithm}")
-st.dataframe(detail_rows, use_container_width=True, hide_index=True)
+    fig = draw_jobs_chart(jobs)
+    st.pyplot(fig, clear_figure=True)
+
+    st.subheader("Job list")
+    st.code(", ".join(str(x) for x in jobs), language="text")
+else:
+    st.warning("No job set has been generated yet.")

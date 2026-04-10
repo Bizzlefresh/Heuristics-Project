@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import statistics
 from typing import Dict, List, Tuple
 
 
@@ -11,7 +12,13 @@ def calculate_metrics(jobs: List[int], machines: List[int], completion_times: Li
     return makespan, avg_completion, utilisation
 
 
-def build_result(name: str, jobs: List[int], assignments: List[dict], machines: List[int], completion_times: List[int]) -> dict:
+def build_result(
+    name: str,
+    jobs: List[int],
+    assignments: List[dict],
+    machines: List[int],
+    completion_times: List[int],
+) -> dict:
     makespan, avg_completion, utilisation = calculate_metrics(jobs, machines, completion_times)
     return {
         "name": name,
@@ -94,7 +101,13 @@ def greedy(jobs: List[int], num_machines: int) -> dict:
     return build_result("Greedy", jobs, assignments, machines, completion_times)
 
 
-def _assign_ordered(name: str, ordered_jobs: List[Tuple[int, int]], original_jobs: List[int], num_machines: int, reason: str) -> dict:
+def _assign_ordered(
+    name: str,
+    ordered_jobs: List[Tuple[int, int]],
+    original_jobs: List[int],
+    num_machines: int,
+    reason: str,
+) -> dict:
     machines = [0] * num_machines
     completion_times: List[int] = []
     assignments: List[dict] = []
@@ -119,11 +132,111 @@ def _assign_ordered(name: str, ordered_jobs: List[Tuple[int, int]], original_job
     return build_result(name, original_jobs, assignments, machines, completion_times)
 
 
+# =========================
+# GENETIC ALGORITHM
+# =========================
+
+def _random_chromosome(num_jobs: int, num_machines: int) -> List[int]:
+    return [random.randint(0, num_machines - 1) for _ in range(num_jobs)]
+
+
+def _compute_makespan_from_chromosome(chromosome: List[int], jobs: List[int], num_machines: int) -> int:
+    machines = [0] * num_machines
+    for job_idx, machine in enumerate(chromosome):
+        machines[machine] += jobs[job_idx]
+    return max(machines)
+
+
+def _fitness(chromosome: List[int], jobs: List[int], num_machines: int) -> float:
+    return 1 / (1 + _compute_makespan_from_chromosome(chromosome, jobs, num_machines))
+
+
+def _tournament(population: List[List[int]], jobs: List[int], num_machines: int, k: int = 3) -> List[int]:
+    selected = random.sample(population, k)
+    selected.sort(key=lambda c: _compute_makespan_from_chromosome(c, jobs, num_machines))
+    return selected[0][:]
+
+
+def _crossover(p1: List[int], p2: List[int]) -> List[int]:
+    if len(p1) < 2:
+        return p1[:]
+    point = random.randint(1, len(p1) - 1)
+    return p1[:point] + p2[point:]
+
+
+def _mutate(chromosome: List[int], num_machines: int, rate: float = 0.1) -> List[int]:
+    new = chromosome[:]
+    for i in range(len(new)):
+        if random.random() < rate:
+            new[i] = random.randint(0, num_machines - 1)
+    return new
+
+
+def genetic_algorithm(
+    jobs: List[int],
+    num_machines: int,
+    population_size: int = 40,
+    generations: int = 100,
+    mutation_rate: float = 0.1,
+    elite_size: int = 2,
+) -> Tuple[dict, List[int]]:
+    num_jobs = len(jobs)
+    population = [_random_chromosome(num_jobs, num_machines) for _ in range(population_size)]
+
+    history: List[int] = []
+
+    for _ in range(generations):
+        population.sort(key=lambda c: _compute_makespan_from_chromosome(c, jobs, num_machines))
+
+        best = population[0]
+        best_makespan = _compute_makespan_from_chromosome(best, jobs, num_machines)
+        history.append(best_makespan)
+
+        next_pop = population[:elite_size]
+
+        while len(next_pop) < population_size:
+            p1 = _tournament(population, jobs, num_machines)
+            p2 = _tournament(population, jobs, num_machines)
+            child = _crossover(p1, p2)
+            child = _mutate(child, num_machines, mutation_rate)
+            next_pop.append(child)
+
+        population = next_pop
+
+    population.sort(key=lambda c: _compute_makespan_from_chromosome(c, jobs, num_machines))
+    best = population[0]
+
+    machines = [0] * num_machines
+    completion_times: List[int] = []
+    assignments: List[dict] = []
+
+    for job_id, duration in enumerate(jobs, start=1):
+        m = best[job_id - 1]
+        start = machines[m]
+        finish = start + duration
+        machines[m] = finish
+        completion_times.append(finish)
+        assignments.append(
+            {
+                "job_id": job_id,
+                "duration": duration,
+                "machine": m,
+                "start": start,
+                "finish": finish,
+                "order_reason": "Assigned via Genetic Algorithm optimisation.",
+            }
+        )
+
+    result = build_result("Genetic Algorithm", jobs, assignments, machines, completion_times)
+    return result, history
+
+
 ALGORITHMS = {
     "FCFS": fcfs,
     "SJF": sjf,
     "LPT": lpt,
     "Greedy": greedy,
+    "Genetic Algorithm": lambda jobs, m: genetic_algorithm(jobs, m)[0],
 }
 
 CONFIGS = {
@@ -143,6 +256,7 @@ ALGO_EXPLANATIONS = {
     "SJF": "Shortest Job First sorts jobs from smallest to largest duration, then schedules them onto the earliest available machine.",
     "LPT": "Longest Processing Time sorts jobs from largest to smallest duration so long jobs are placed early and the machine loads are often more balanced.",
     "Greedy": "Greedy keeps the arrival order but, for each next job, checks every machine and chooses the one that gives the smallest projected makespan at that moment.",
+    "Genetic Algorithm": "Genetic Algorithm searches for a better assignment of jobs to machines over multiple generations using selection, crossover, and mutation.",
 }
 
 METRIC_EXPLANATIONS = {
@@ -150,7 +264,6 @@ METRIC_EXPLANATIONS = {
     "Average Completion": "The average of all job finish times. Lower means jobs tend to finish earlier on average.",
     "Utilisation": "Total busy time divided by (number of machines × makespan). Values closer to 1 mean the machines are kept busy for most of the schedule.",
 }
-
 
 def generate_jobs(n: int, seed: int, min_time: int = 1, max_time: int = 50) -> List[int]:
     rng = random.Random(seed)
@@ -175,3 +288,44 @@ def build_results_table(results: Dict[str, dict]):
             }
         )
     return pd.DataFrame(rows).sort_values("Makespan").reset_index(drop=True)
+
+
+# =========================
+# MULTI-RUN EVALUATION
+# =========================
+
+def run_multiple_experiments(num_runs: int, config_name: str, seed: int = 42):
+    config = CONFIGS[config_name]
+
+    results_per_algo = {name: [] for name in ALGORITHMS.keys()}
+    ga_histories: List[List[int]] = []
+
+    for i in range(num_runs):
+        jobs = generate_jobs(config["num_jobs"], seed + i)
+
+        for name, func in ALGORITHMS.items():
+            if name == "Genetic Algorithm":
+                result, history = genetic_algorithm(jobs, config["num_machines"])
+                ga_histories.append(history)
+            else:
+                result = func(jobs, config["num_machines"])
+
+            results_per_algo[name].append(result["makespan"])
+
+    summary = {}
+    for name, values in results_per_algo.items():
+        summary[name] = {
+            "Average": sum(values) / len(values),
+            "Min": min(values),
+            "Max": max(values),
+            "Std": statistics.stdev(values) if len(values) > 1 else 0.0,
+        }
+
+    avg_ga_history: List[float] = []
+    if ga_histories:
+        max_len = max(len(h) for h in ga_histories)
+        for idx in range(max_len):
+            vals = [h[idx] for h in ga_histories if idx < len(h)]
+            avg_ga_history.append(sum(vals) / len(vals))
+
+    return summary, results_per_algo, avg_ga_history

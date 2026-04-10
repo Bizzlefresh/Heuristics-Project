@@ -11,7 +11,11 @@ st.set_page_config(page_title="Configure Jobs", page_icon="⚙️", layout="wide
 st.title("Configure Jobs")
 st.write("Set the experiment first. The demo and results pages will stay empty until you generate the jobs.")
 
-config_name = st.selectbox("Choose configuration", list(CONFIGS.keys()), index=list(CONFIGS.keys()).index(st.session_state.get("selected_config", "Configuration 1")))
+config_name = st.selectbox(
+    "Choose configuration",
+    list(CONFIGS.keys()),
+    index=list(CONFIGS.keys()).index(st.session_state.get("selected_config", "Configuration 1")),
+)
 st.session_state.selected_config = config_name
 config = CONFIGS[config_name]
 
@@ -20,7 +24,13 @@ with col1:
     st.metric("Number of jobs", config["num_jobs"])
     st.metric("Number of machines", config["num_machines"])
 with col2:
-    seed = st.number_input("Random seed", min_value=1, max_value=9999, value=int(st.session_state.get("seed", 42)), step=1)
+    seed = st.number_input(
+        "Random seed",
+        min_value=1,
+        max_value=9999,
+        value=int(st.session_state.get("seed", 42)),
+        step=1,
+    )
     st.session_state.seed = int(seed)
     st.write(CONFIG_DESCRIPTIONS[config_name])
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import streamlit as st
 
-from utils.scheduler_core import METRIC_EXPLANATIONS, build_results_table
-from utils.visuals import draw_metric_chart, draw_schedule
+from utils.scheduler_core import METRIC_EXPLANATIONS, build_results_table, run_multiple_experiments
+from utils.visuals import draw_metric_chart, draw_schedule, draw_boxplot, draw_line_chart
 
 
 st.set_page_config(page_title="Results & Comparison", page_icon="📈", layout="wide")
@@ -60,3 +61,66 @@ st.markdown(
 - **Utilisation** depends on total job work divided by total machine capacity over the whole makespan.
 """
 )
+
+st.markdown("---")
+
+st.subheader("Professor-requested statistical evaluation")
+num_runs = st.slider("Number of randomized runs", min_value=5, max_value=50, value=30, step=5)
+
+if st.button("Run Multi-Run Evaluation", use_container_width=True):
+    summary, results_per_algo, avg_ga_history = run_multiple_experiments(
+        num_runs=num_runs,
+        config_name=st.session_state.selected_config,
+        seed=st.session_state.seed,
+    )
+
+    summary_rows = []
+    for algo, vals in summary.items():
+        summary_rows.append(
+            {
+                "Algorithm": algo,
+                "Average Makespan": round(vals["Average"], 2),
+                "Minimum": vals["Min"],
+                "Maximum": vals["Max"],
+                "Std Dev": round(vals["Std"], 2),
+            }
+        )
+
+    stats_df = pd.DataFrame(summary_rows).sort_values("Average Makespan").reset_index(drop=True)
+
+    st.subheader(f"{num_runs}-Run Statistical Summary")
+    st.dataframe(stats_df, use_container_width=True, hide_index=True)
+
+    s1, s2 = st.columns(2)
+    with s1:
+        avg_df = stats_df[["Algorithm", "Average Makespan"]].rename(columns={"Average Makespan": "Makespan"})
+        fig = draw_metric_chart(avg_df, "Makespan")
+        st.pyplot(fig, clear_figure=True)
+        plt.close(fig)
+
+    with s2:
+        fig = draw_boxplot(results_per_algo)
+        st.pyplot(fig, clear_figure=True)
+        plt.close(fig)
+
+    if avg_ga_history:
+        st.subheader("Average Genetic Algorithm Convergence")
+        fig = draw_line_chart(
+            avg_ga_history,
+            title="GA Convergence Across Runs",
+            x_label="Generation",
+            y_label="Best Makespan",
+        )
+        st.pyplot(fig, clear_figure=True)
+        plt.close(fig)
+
+    st.markdown(
+        """
+**How to interpret the statistical results:**
+- **Average Makespan** shows the overall performance across many randomized runs.
+- **Minimum and Maximum** show the best and worst observed outcomes.
+- **Standard Deviation** shows consistency. Lower values mean the algorithm behaves more reliably.
+- The **boxplot** shows the spread of makespan values across runs.
+- The **GA convergence plot** shows how the evolutionary method improves its best solution over generations.
+"""
+    )
